@@ -11,7 +11,6 @@ use winapi::shared::minwindef::*;
 pub use winapi::shared::windef::HWND;
 #[cfg(windows)]
 use winapi::shared::winerror::S_OK;
-use winapi::um::commctrl::TDM_SET_BUTTON_ELEVATION_REQUIRED_STATE;
 #[cfg(windows)]
 use winapi::um::commctrl::{
     TASKDIALOGCONFIG_u1, TASKDIALOGCONFIG_u2, TaskDialogIndirect, HRESULT, TASKDIALOGCONFIG,
@@ -23,10 +22,12 @@ use winapi::um::commctrl::{
     TDM_UPDATE_ELEMENT_TEXT,
 };
 #[cfg(windows)]
-use winapi::um::commctrl::{
+pub use winapi::um::commctrl::{
     TDF_SHOW_MARQUEE_PROGRESS_BAR, TDF_SHOW_PROGRESS_BAR, TDM_SET_PROGRESS_BAR_MARQUEE,
-    TDM_SET_PROGRESS_BAR_POS, TDN_CREATED, TDN_DESTROYED, TDN_HYPERLINK_CLICKED,
+    TDM_SET_PROGRESS_BAR_POS, TDN_BUTTON_CLICKED, TDN_CREATED, TDN_DESTROYED,
+    TDN_HYPERLINK_CLICKED, TDN_NAVIGATED,
 };
+use winapi::um::commctrl::{TDM_NAVIGATE_PAGE, TDM_SET_BUTTON_ELEVATION_REQUIRED_STATE};
 #[cfg(windows)]
 use winapi::um::libloaderapi::GetModuleHandleA;
 #[cfg(windows)]
@@ -73,20 +74,50 @@ pub struct TaskDialogConfig {
     pub instance: HMODULE,
     pub flags: TASKDIALOG_FLAGS,
     pub common_buttons: TASKDIALOG_COMMON_BUTTON_FLAGS,
-    pub window_title: String,
-    pub main_instruction: String,
-    pub content: String,
-    pub verification_text: String,
-    pub expanded_information: String,
-    pub expanded_control_text: String,
-    pub collapsed_control_text: String,
-    pub footer: String,
+    pub window_title: Option<String>,
+    pub main_instruction: Option<String>,
+    pub content: Option<String>,
+    pub verification_text: Option<String>,
+    pub expanded_information: Option<String>,
+    pub expanded_control_text: Option<String>,
+    pub collapsed_control_text: Option<String>,
+    pub footer: Option<String>,
     pub buttons: Vec<TaskDialogButton>,
     pub default_button: i32,
     pub radio_buttons: Vec<TaskDialogButton>,
     pub default_radio_buttons: i32,
-    pub main_icon: LPWSTR,
-    pub footer_icon: LPWSTR,
+    pub main_icon: Option<LPWSTR>,
+    pub footer_icon: Option<LPWSTR>,
+    /** When created dialog, the value set to HWND. */
+    pub dialog_hwnd: HWND,
+    /** When close the dialog, the value set to true, default is false. */
+    pub is_destroyed: bool,
+    pub hyperlink_callback: TaskDialogHyperlinkCallback,
+    pub callback: TaskDialogWndProcCallback,
+    pub cx_width: u32,
+}
+
+pub struct TaskDialogResource {
+    pub parent: HWND,
+    pub instance: HMODULE,
+    pub flags: TASKDIALOG_FLAGS,
+    pub common_buttons: TASKDIALOG_COMMON_BUTTON_FLAGS,
+    pub window_title: Option<U16CString>,
+    pub main_instruction: Option<U16CString>,
+    pub content: Option<U16CString>,
+    pub verification_text: Option<U16CString>,
+    pub expanded_information: Option<U16CString>,
+    pub expanded_control_text: Option<U16CString>,
+    pub collapsed_control_text: Option<U16CString>,
+    pub footer: Option<U16CString>,
+    pub buttons_resource: Vec<U16CString>,
+    pub buttons: Vec<TASKDIALOG_BUTTON>,
+    pub default_button: i32,
+    pub radio_buttons_resource: Vec<U16CString>,
+    pub radio_buttons: Vec<TASKDIALOG_BUTTON>,
+    pub default_radio_buttons: i32,
+    pub main_icon: Option<LPWSTR>,
+    pub footer_icon: Option<LPWSTR>,
     /** When created dialog, the value set to HWND. */
     pub dialog_hwnd: HWND,
     /** When close the dialog, the value set to true, default is false. */
@@ -103,20 +134,20 @@ impl Default for TaskDialogConfig {
             instance: null_mut(),
             flags: 0,
             common_buttons: TDCBF_CANCEL_BUTTON,
-            window_title: "".to_string(),
-            main_instruction: "".to_string(),
-            content: "".to_string(),
-            verification_text: "".to_string(),
-            expanded_information: "".to_string(),
-            expanded_control_text: "".to_string(),
-            collapsed_control_text: "".to_string(),
-            footer: "".to_string(),
+            window_title: None,
+            main_instruction: None,
+            content: None,
+            verification_text: None,
+            expanded_information: None,
+            expanded_control_text: None,
+            collapsed_control_text: None,
+            footer: None,
             buttons: vec![],
             default_button: 0,
             radio_buttons: vec![],
             default_radio_buttons: 0,
-            main_icon: null_mut(),
-            footer_icon: null_mut(),
+            main_icon: None,
+            footer_icon: None,
             dialog_hwnd: null_mut(),
             is_destroyed: false,
             hyperlink_callback: None,
@@ -254,6 +285,13 @@ impl TaskDialogConfig {
             );
         }
     }
+
+    #[inline(always)]
+    pub fn navigate_page(&mut self, hwnd: HWND, config: &mut TaskDialogConfig) {
+        unsafe {
+            SendMessageA(hwnd, TDM_NAVIGATE_PAGE, 0, config as *mut _ as _);
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -289,6 +327,97 @@ impl Default for TaskDialogResult {
     }
 }
 
+impl Into<TaskDialogResource> for &mut TaskDialogConfig {
+    fn into(self) -> TaskDialogResource {
+        unsafe {
+            let mut res = TaskDialogResource {
+                parent: self.parent,
+                instance: self.instance,
+                flags: self.flags,
+                common_buttons: self.common_buttons,
+                window_title: self
+                    .window_title
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                main_instruction: self
+                    .main_instruction
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                content: self
+                    .content
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                verification_text: self
+                    .verification_text
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                expanded_information: self
+                    .expanded_information
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                expanded_control_text: self
+                    .expanded_control_text
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                collapsed_control_text: self
+                    .collapsed_control_text
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                footer: self
+                    .footer
+                    .to_owned()
+                    .map(|s| U16CString::from_os_str_unchecked(s)),
+                buttons_resource: self
+                    .buttons
+                    .iter()
+                    .map(|b| U16CString::from_str_unchecked(&b.text))
+                    .collect(),
+                buttons: Vec::new(), // setup later
+                default_button: self.default_button,
+                radio_buttons_resource: self
+                    .radio_buttons
+                    .iter()
+                    .map(|b| U16CString::from_str_unchecked(&b.text))
+                    .collect(),
+                radio_buttons: Vec::new(), // setup later
+                default_radio_buttons: self.default_radio_buttons,
+                main_icon: self.main_icon,
+                footer_icon: self.footer_icon,
+                dialog_hwnd: self.dialog_hwnd,
+                is_destroyed: self.is_destroyed,
+                hyperlink_callback: self.hyperlink_callback,
+                callback: self.callback,
+                cx_width: self.cx_width,
+            };
+            res.buttons = self
+                .buttons
+                .iter()
+                .enumerate()
+                .map(|(i, b)| TASKDIALOG_BUTTON {
+                    nButtonID: b.id,
+                    pszButtonText: res.buttons_resource[i].as_ptr(),
+                })
+                .collect();
+            res.radio_buttons = self
+                .radio_buttons
+                .iter()
+                .enumerate()
+                .map(|(i, btn)| TASKDIALOG_BUTTON {
+                    nButtonID: btn.id,
+                    pszButtonText: res.radio_buttons_resource[i].as_ptr(),
+                })
+                .collect();
+            res
+        }
+    }
+}
+
+impl From<&TaskDialogConfig> for TaskDialogResource {
+    fn from(conf: &TaskDialogConfig) -> Self {
+        unsafe { TaskDialogResource { ..conf.into() } }
+    }
+}
+
 /** Show task dialog */
 #[cfg(windows)]
 pub fn show_task_dialog(conf: &mut TaskDialogConfig) -> Result<TaskDialogResult, Error> {
@@ -304,59 +433,16 @@ pub fn show_task_dialog(conf: &mut TaskDialogConfig) -> Result<TaskDialogResult,
             conf.instance
         };
 
-        // Some text
-        let window_title: U16CString = U16CString::from_str_unchecked(&conf.window_title);
-        let main_instruction: U16CString = U16CString::from_str_unchecked(&conf.main_instruction);
-        let content: U16CString = U16CString::from_str_unchecked(&conf.content);
-        let verification_text: U16CString = U16CString::from_str_unchecked(&conf.verification_text);
-        let expanded_information: U16CString =
-            U16CString::from_str_unchecked(&conf.expanded_information);
-        let expanded_control_text: U16CString =
-            U16CString::from_str_unchecked(&conf.expanded_control_text);
-        let collapsed_control_text: U16CString =
-            U16CString::from_str_unchecked(&conf.collapsed_control_text);
-        let footer: U16CString = U16CString::from_str_unchecked(&conf.footer);
-
-        // Buttons
-        let btn_text: Vec<U16CString> = conf
-            .buttons
-            .iter()
-            .map(|btn| U16CString::from_str_unchecked(&btn.text))
-            .collect();
-        let buttons: Vec<TASKDIALOG_BUTTON> = conf
-            .buttons
-            .iter()
-            .enumerate()
-            .map(|(i, btn)| TASKDIALOG_BUTTON {
-                nButtonID: btn.id,
-                pszButtonText: btn_text[i].as_ptr(),
-            })
-            .collect();
-
-        // Radio Buttons
-        let radio_btn_text: Vec<U16CString> = conf
-            .radio_buttons
-            .iter()
-            .map(|btn| U16CString::from_str_unchecked(&btn.text))
-            .collect();
-        let radio_buttons: Vec<TASKDIALOG_BUTTON> = conf
-            .radio_buttons
-            .iter()
-            .enumerate()
-            .map(|(i, btn)| TASKDIALOG_BUTTON {
-                nButtonID: btn.id,
-                pszButtonText: radio_btn_text[i].as_ptr(),
-            })
-            .collect();
+        let resource: TaskDialogResource = conf.into();
 
         // ICON
         let mut u1: TASKDIALOGCONFIG_u1 = Default::default();
         let mut u2: TASKDIALOGCONFIG_u2 = Default::default();
-        if conf.main_icon != null_mut() {
-            core::ptr::write(u1.pszMainIcon_mut(), conf.main_icon as *const u16);
+        if let Some(icon) = resource.main_icon {
+            *u1.pszMainIcon_mut() = icon;
         }
-        if conf.footer_icon != null_mut() {
-            core::ptr::write(u2.pszFooterIcon_mut(), conf.footer_icon as *const u16);
+        if let Some(icon) = resource.footer_icon {
+            *u2.pszFooterIcon_mut() = icon;
         }
 
         unsafe extern "system" fn callback(
@@ -385,25 +471,35 @@ pub fn show_task_dialog(conf: &mut TaskDialogConfig) -> Result<TaskDialogResult,
             S_OK
         }
 
+        let title: *const u16 = resource.window_title.map_or(null_mut(), |u| u.as_ptr());
+
         let config = TASKDIALOGCONFIG {
             cbSize: std::mem::size_of::<TASKDIALOGCONFIG>() as UINT,
             hwndParent: conf.parent,
             hInstance: instance,
             dwFlags: conf.flags,
             dwCommonButtons: conf.common_buttons,
-            pszWindowTitle: window_title.as_ptr(),
-            pszMainInstruction: main_instruction.as_ptr(),
-            pszContent: content.as_ptr(),
-            pszVerificationText: verification_text.as_ptr(),
-            pszExpandedInformation: expanded_information.as_ptr(),
-            pszExpandedControlText: expanded_control_text.as_ptr(),
-            pszCollapsedControlText: collapsed_control_text.as_ptr(),
-            pszFooter: footer.as_ptr(),
-            cButtons: buttons.len() as UINT,
-            pButtons: buttons.as_slice().as_ptr(),
+            pszWindowTitle: title as _,
+            pszMainInstruction: resource.main_instruction.map_or(null_mut(), |u| u.as_ptr()),
+            pszContent: resource.content.map_or(null_mut(), |u| u.as_ptr()),
+            pszVerificationText: resource
+                .verification_text
+                .map_or(null_mut(), |u| u.as_ptr()),
+            pszExpandedInformation: resource
+                .expanded_information
+                .map_or(null_mut(), |u| u.as_ptr()),
+            pszExpandedControlText: resource
+                .expanded_control_text
+                .map_or(null_mut(), |u| u.as_ptr()),
+            pszCollapsedControlText: resource
+                .collapsed_control_text
+                .map_or(null_mut(), |u| u.as_ptr()),
+            pszFooter: resource.footer.map_or(null_mut(), |u| u.as_ptr()),
+            cButtons: resource.buttons.len() as UINT,
+            pButtons: resource.buttons.as_slice().as_ptr(),
             nDefaultButton: conf.default_button,
-            cRadioButtons: radio_buttons.len() as UINT,
-            pRadioButtons: radio_buttons.as_slice().as_ptr(),
+            cRadioButtons: resource.radio_buttons.len() as UINT,
+            pRadioButtons: resource.radio_buttons.as_slice().as_ptr(),
             nDefaultRadioButton: conf.default_radio_buttons,
             u1,
             u2,
@@ -433,16 +529,16 @@ pub fn show_task_dialog(conf: &mut TaskDialogConfig) -> Result<TaskDialogResult,
 /** Show message dialog, the dialog have only the OK button */
 #[cfg(windows)]
 pub fn show_msg_dialog(
-    title: &str,
-    main_instruction: &str,
-    content: &str,
-    icon: LPWSTR,
+    title: Option<&str>,
+    main_instruction: Option<&str>,
+    content: Option<&str>,
+    icon: Option<LPWSTR>,
 ) -> Option<Error> {
     let mut conf = TaskDialogConfig {
         common_buttons: TDCBF_OK_BUTTON,
-        window_title: title.to_string(),
-        main_instruction: main_instruction.to_string(),
-        content: content.to_string(),
+        window_title: title.map(|s| s.to_string()),
+        main_instruction: main_instruction.map(|s| s.to_string()),
+        content: content.map(|s| s.to_string()),
         main_icon: icon,
         ..Default::default()
     };

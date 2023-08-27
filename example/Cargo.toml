@@ -5,7 +5,12 @@ authors = ["RobinCode <xv.robincode@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-win-task-dialog = {path = "../"}
+win-task-dialog = { path = "../" }
+winapi = { version = "0.3", features = [
+    "combaseapi",
+    "objbase",
+    "processthreadsapi",
+] }
 
 [build-dependencies]
 embed-resource = "2.1"

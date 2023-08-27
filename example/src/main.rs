@@ -1,8 +1,10 @@
 extern crate win_task_dialog;
 
-use std::thread;
 use std::time::Duration;
+use std::{ptr, thread};
 use win_task_dialog::*;
+use winapi::um::combaseapi::CoInitializeEx;
+use winapi::um::objbase::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
 
 fn hyperlink_callback(context: &str) {
     println!("hyperlink_callback: {}", context);
@@ -23,14 +25,17 @@ unsafe extern "system" fn callback(
 }
 
 fn main() {
+    page_navigation();
+    return;
+
     let mut conf = TaskDialogConfig {
         flags: TDF_USE_COMMAND_LINKS | TDF_ENABLE_HYPERLINKS,
         common_buttons: TDCBF_OK_BUTTON | TDCBF_CANCEL_BUTTON,
-        window_title: "Title 标题".to_string(),
-        main_instruction: "Привет".to_string(),
-        content: "こんにちは".to_string(),
-        verification_text: "VerificationText".to_string(),
-        footer: "footer\n<a href=\"http://example.com\">example.com</a>".to_string(),
+        window_title: Some("Title 标题".to_string()),
+        main_instruction: Some("Привет".to_string()),
+        content: Some("こんにちは".to_string()),
+        verification_text: Some("VerificationText".to_string()),
+        footer: Some("footer\n<a href=\"http://example.com\">example.com</a>".to_string()),
         buttons: vec![
             TaskDialogButton {
                 id: 10,
@@ -52,8 +57,8 @@ fn main() {
                 text: "Option 2".to_string(),
             },
         ],
-        main_icon: TD_SHIELD_ICON,
-        footer_icon: TD_INFORMATION_ICON,
+        main_icon: Some(TD_SHIELD_ICON),
+        footer_icon: Some(TD_INFORMATION_ICON),
         hyperlink_callback: Some(hyperlink_callback),
         callback: Some(callback),
         ..TaskDialogConfig::default()
@@ -69,18 +74,28 @@ fn main() {
     show_process_bar_marquee();
     show_process_bar();
 
-    show_msg_dialog("Title", "Hi", "Info", TD_INFORMATION_ICON);
-    show_msg_dialog("Title", "!!!", "Error", TD_ERROR_ICON);
+    show_msg_dialog(
+        Some("Title"),
+        Some("Hi"),
+        Some("Info"),
+        Some(TD_INFORMATION_ICON),
+    );
+    show_msg_dialog(
+        Some("Title"),
+        Some("!!!"),
+        Some("Error"),
+        Some(TD_ERROR_ICON),
+    );
 }
 
 // Show dynamic text dialog
 fn show_dynamic_text_dialog() {
     let mut conf = TaskDialogConfig {
-        window_title: "Dynamic Text".to_string(),
-        main_instruction: "Main".to_string(),
-        content: "Content".to_string(),
-        footer: "Footer".to_string(),
-        expanded_information: "Info".to_string(),
+        window_title: Some("Dynamic Text".to_string()),
+        main_instruction: Some("Main".to_string()),
+        content: Some("Content".to_string()),
+        footer: Some("Footer".to_string()),
+        expanded_information: Some("Info".to_string()),
         ..Default::default()
     };
 
@@ -107,8 +122,8 @@ fn show_dynamic_text_dialog() {
 // Process Bar Marquee
 fn show_process_bar_marquee() {
     let mut conf = TaskDialogConfig {
-        window_title: "Process Bar".to_string(),
-        main_instruction: "Process Bar Marquee 1".to_string(),
+        window_title: Some("Process Bar".to_string()),
+        main_instruction: Some("Process Bar Marquee 1".to_string()),
         ..Default::default()
     };
     conf.enable_process_bar(true);
@@ -133,9 +148,9 @@ fn show_process_bar_marquee() {
 // Process Bar (Not Marquee)
 fn show_process_bar() {
     let mut conf = TaskDialogConfig {
-        window_title: "Process Bar".to_string(),
-        main_instruction: "Process Bar (Not Marquee)".to_string(),
-        content: "".to_string(),
+        window_title: Some("Process Bar".to_string()),
+        main_instruction: Some("Process Bar (Not Marquee)".to_string()),
+        content: None,
         ..Default::default()
     };
     conf.enable_process_bar(false);
@@ -152,6 +167,57 @@ fn show_process_bar() {
             (*conf).set_process_bar(i);
         }
     });
+
+    show_task_dialog(&mut conf).unwrap();
+}
+
+fn page_navigation() {
+    use winapi::um::processthreadsapi::GetCurrentThreadId;
+
+    unsafe {
+        CoInitializeEx(
+            ptr::null_mut(),
+            COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE,
+        )
+    };
+    unsafe extern "system" fn page1_callback(
+        _: HWND,
+        msg: u32,
+        w_param: usize,
+        _: isize,
+        ref_data: *mut TaskDialogConfig,
+    ) -> i32 {
+        println!("msg={} tid={}", msg, unsafe { GetCurrentThreadId() });
+        if msg == TDN_NAVIGATED {
+        } else if msg == TDN_BUTTON_CLICKED {
+            // TDN_BUTTON_CLICKED
+            if w_param as i32 == 1777 {
+                let mut page2_conf = TaskDialogConfig {
+                    window_title: Some("Page Navigation".to_owned()),
+                    main_instruction: Some("Page #2".to_owned()),
+                    common_buttons: TDCBF_CLOSE_BUTTON,
+                    ..Default::default()
+                };
+                (*ref_data).navigate_page((*ref_data).dialog_hwnd, &mut page2_conf);
+                return 1; // S_FALSE
+            }
+        }
+        0
+    }
+
+    println!("tid={}", unsafe { GetCurrentThreadId() });
+
+    let mut conf = TaskDialogConfig {
+        window_title: Some("Page Navigation".to_owned()),
+        main_instruction: Some("Page #1".to_owned()),
+        callback: Some(page1_callback),
+        common_buttons: TDCBF_CLOSE_BUTTON,
+        buttons: vec![TaskDialogButton {
+            id: 1777,
+            text: "Continue".to_owned(),
+        }],
+        ..Default::default()
+    };
 
     show_task_dialog(&mut conf).unwrap();
 }
